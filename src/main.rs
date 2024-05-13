@@ -127,7 +127,7 @@ impl MediaProcessor {
                 .parse::<f64>()
                 .map_err(|err| MyError::Application(format!("{ERROR_DATA}:{err:?}")))?;
         }
-        let cmaps = args.char_map.chars().collect();
+        let cmaps = (&args.char_map).into();
         let w_mod = args.w_mod;
         let loop_playback = args.loop_playback;
         let allow_frame_skip = args.allow_frame_skip;

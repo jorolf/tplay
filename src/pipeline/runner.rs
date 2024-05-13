@@ -30,7 +30,7 @@ enum State {
 /// changing character maps during playback.
 pub struct Runner {
     /// The image pipeline responsible for processing images.
-    pipeline: ImagePipeline,
+    pipeline: ImagePipeline<CharMaps>,
     /// The FrameIterator that handles iterating through frames.
     media: FrameIterator,
     /// The current playback state of the Runner.
@@ -42,7 +42,7 @@ pub struct Runner {
     /// A channel for sending control events to the media processing thread.
     tx_control: Sender<MediaControl>,
     /// A collection of character maps available for the image pipeline.
-    char_maps: Vec<Vec<char>>,
+    char_maps: Vec<CharMaps>,
     /// The last frame that was processed by the Runner.
     last_frame: Option<DynamicImage>,
     /// Runner options
@@ -91,24 +91,24 @@ impl Runner {
     /// * `w_mod` - The width modifier (use 2 for emojis).
     /// * `loop_playback` - Flags whether the runner will loop round after processing all frames.
     pub fn new(
-        pipeline: ImagePipeline,
+        pipeline: ImagePipeline<CharMaps>,
         media: FrameIterator,
         tx_frames: Sender<Option<StringInfo>>,
         rx_controls: Receiver<Control>,
         tx_control: Sender<MediaControl>,
         runner_options: RunnerOptions,
     ) -> Self {
-        let char_maps: Vec<Vec<char>> = vec![
+        let char_maps: Vec<CharMaps> = vec![
             pipeline.char_map.clone(),
-            CHARS1.to_string().chars().collect(),
-            CHARS2.to_string().chars().collect(),
-            CHARS3.to_string().chars().collect(),
-            SOLID.to_string().chars().collect(),
-            DOTTED.to_string().chars().collect(),
-            GRADIENT.to_string().chars().collect(),
-            BLACKWHITE.to_string().chars().collect(),
-            BW_DOTTED.to_string().chars().collect(),
-            BRAILLE.to_string().chars().collect(),
+            CHARS1.into(),
+            CHARS2.into(),
+            CHARS3.into(),
+            SOLID.into(),
+            DOTTED.into(),
+            GRADIENT.into(),
+            CharMaps::Mosaic,
+            BRAILLE.into(),
+            CharMaps::Braille,
         ];
         Self {
             pipeline,
@@ -188,9 +188,8 @@ impl Runner {
     /// A Result containing a tuple of the ASCII string representation of the processed image and
     /// the RGB data of the processed image.
     fn process_frame(&mut self, frame: &DynamicImage) -> Result<StringInfo, MyError> {
-        let procimage = self.pipeline.resize(frame)?;
-        let grayimage = procimage.clone().into_luma8();
-        let rgb_info = procimage.into_rgb8().to_vec();
+        let (grayimage, rgb_info) = self.pipeline.resize(frame)?;
+        let rgb_info = rgb_info.to_vec();
 
         // Add newlines to the rgb_info to match the ascii string These are not
         // really needed, but it's important if you want to copy/paste the
@@ -430,7 +429,7 @@ mod tests {
         let loop_playback = false;
         let media_data = open_media(MEDIA_FILE.to_string()).unwrap();
         let media = media_data.frame_iter;
-        let pipeline = ImagePipeline::new((23, 80), CHARS1.chars().collect(), false);
+        let pipeline = ImagePipeline::new((23, 80), CHARS1.into(), false);
 
         let (tx_frames, _rx_frames) = bounded::<Option<StringInfo>>(1);
         let (_tx_controls_pipeline, rx_controls_pipeline) = unbounded::<PipelineControl>();

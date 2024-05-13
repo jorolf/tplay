@@ -3,22 +3,24 @@
 //! representations using a character lookup table.
 use crate::common::errors::*;
 use fast_image_resize as fr;
-use image::{DynamicImage, GrayImage};
+use image::{DynamicImage, GenericImageView as _, GrayImage, RgbImage};
 use std::num::NonZeroU32;
+
+use super::char_maps::CharMap;
 
 /// The `ImagePipeline` struct encapsulates the process of converting an image to ASCII art. It
 /// stores the target resolution (width and height) and the character lookup table used for the
 /// conversion.
-pub struct ImagePipeline {
+pub struct ImagePipeline<T: CharMap> {
     /// The target resolution (width and height) for the pipeline.
     pub target_resolution: (u32, u32),
     /// The character lookup table used for the conversion.
-    pub char_map: Vec<char>,
+    pub char_map: T,
     /// Whether to add newlines to the output at the end of each line
     pub new_lines: bool,
 }
 
-impl ImagePipeline {
+impl<T: CharMap> ImagePipeline<T> {
     /// Constructs a new `ImagePipeline` with the given target resolution (width and height) and
     /// character lookup table (a vector of characters).
     ///
@@ -28,7 +30,7 @@ impl ImagePipeline {
     ///   height.
     /// * `char_map` - A vector of characters to be used as the lookup table for ASCII
     ///   conversion.
-    pub fn new(target_resolution: (u32, u32), char_map: Vec<char>, new_lines: bool) -> Self {
+    pub fn new(target_resolution: (u32, u32), char_map: T, new_lines: bool) -> Self {
         Self {
             target_resolution,
             char_map,
@@ -71,36 +73,59 @@ impl ImagePipeline {
     /// * An error occurs while creating an `fr::Image` from the input image.
     /// * An error occurs while resizing the image using the `fr::Resizer`.
     /// * An error occurs while creating an `ImageBuffer` from the resized image data.
-    pub fn resize(&self, img: &DynamicImage) -> Result<DynamicImage, MyError> {
-        let width =
+    pub fn resize(&self, img: &DynamicImage) -> Result<(GrayImage, RgbImage), MyError> {
+
+        let subpixel_res = self.char_map.get_subpixels();
+
+        let subpixel_img = self.resize_single(
+            img,
+            NonZeroU32::new(self.target_resolution.0 * subpixel_res.0)
+                .ok_or(MyError::Pipeline(ERROR_DATA.to_string()))?,
+            NonZeroU32::new(self.target_resolution.1 * subpixel_res.1)
+                .ok_or(MyError::Pipeline(ERROR_DATA.to_string()))?,
+            fr::ResizeAlg::Nearest
+        )?;
+
+        let color_img = self.resize_single(
+            &subpixel_img,
+            NonZeroU32::new(self.target_resolution.0)
+                .ok_or(MyError::Pipeline(ERROR_DATA.to_string()))?,
+            NonZeroU32::new(self.target_resolution.1)
+                .ok_or(MyError::Pipeline(ERROR_DATA.to_string()))?,
+            fr::ResizeAlg::Convolution(fr::FilterType::Box)
+        )?;
+
+        Ok((subpixel_img.into_luma8(), color_img.into_rgb8()))
+    }
+
+    fn resize_single(&self, img: &DynamicImage, width: NonZeroU32, height: NonZeroU32, algo: fr::ResizeAlg) -> Result<DynamicImage, MyError> {
+        let src_width =
             NonZeroU32::new(img.width()).ok_or(MyError::Pipeline(ERROR_DATA.to_string()))?;
-        let height =
+        let src_height =
             NonZeroU32::new(img.height()).ok_or(MyError::Pipeline(ERROR_DATA.to_string()))?;
         let src_image = fr::Image::from_vec_u8(
-            width,
-            height,
+            src_width,
+            src_height,
             img.to_owned().into_rgb8().to_vec(),
             fr::PixelType::U8x3,
         )
         .map_err(|err| MyError::Pipeline(format!("{ERROR_RESIZE}:{err:?}")))?;
         let mut dst_image = fr::Image::new(
-            NonZeroU32::new(self.target_resolution.0)
-                .ok_or(MyError::Pipeline(ERROR_DATA.to_string()))?,
-            NonZeroU32::new(self.target_resolution.1)
-                .ok_or(MyError::Pipeline(ERROR_DATA.to_string()))?,
+            width,
+            height,
             fr::PixelType::U8x3,
         );
         let mut dst_view = dst_image.view_mut();
 
-        let mut resizer = fr::Resizer::new(fr::ResizeAlg::Nearest);
+        let mut resizer = fr::Resizer::new(algo);
         resizer
             .resize(&src_image.view(), &mut dst_view)
             .map_err(|err| MyError::Pipeline(format!("{ERROR_RESIZE}:{err:?}")))?;
 
         let dst_image = dst_image.into_vec();
         let img_buff = image::ImageBuffer::<image::Rgb<u8>, _>::from_vec(
-            self.target_resolution.0,
-            self.target_resolution.1,
+            width.into(),
+            height.into(),
             dst_image,
         )
         .ok_or(MyError::Pipeline(ERROR_DATA.to_string()))?;
@@ -122,15 +147,18 @@ impl ImagePipeline {
     ///
     /// A `String` containing the ASCII art representation of the input image.
     pub fn to_ascii(&self, input: &GrayImage) -> String {
-        let (width, height) = (input.width(), input.height());
+        let (width, height) = self.target_resolution;
+        
         let capacity = (width + 1) * height + 1;
         let mut output = String::with_capacity(capacity as usize);
 
+        let (subpixel_width, subpixel_height) = self.char_map.get_subpixels();
+        assert_eq!(width * subpixel_width, input.width());
+        assert_eq!(height * subpixel_height, input.height());
+
         for y in 0..height {
             output.extend((0..width).map(|x| {
-                let lum = input.get_pixel(x, y)[0] as u32;
-                let lookup_idx = self.char_map.len() * lum as usize / (u8::MAX as usize + 1);
-                self.char_map[lookup_idx]
+                self.char_map.get_char(&input.view(x * subpixel_width, y * subpixel_height, subpixel_width, subpixel_height))
             }));
 
             // Add newlines to the end of each row except the last. NOTE: these
@@ -179,20 +207,20 @@ mod tests {
         let image = ImagePipeline::new((120, 80), vec!['a', 'b', 'c'], false);
         let input = download_image(TEST_IMAGE_URL).expect("Failed to download image");
 
-        let output = image.resize(&input).expect("Failed to resize image");
+        let output = image.resize(&input).expect("Failed to resize image").1;
         assert_eq!(output.width(), 120);
         assert_eq!(output.height(), 80);
     }
 
     #[test]
     fn test_to_ascii_ext() {
-        let image = ImagePipeline::new((120, 80), CHARS1.chars().collect(), false);
+        let image = ImagePipeline::new((120, 80), CHARS1.chars().collect::<Vec<char>>(), false);
         let input = download_image(TEST_IMAGE_URL).expect("Failed to download image");
         let output = image.to_ascii(
             &image
                 .resize(&input)
                 .expect("Failed to resize image")
-                .into_luma8(),
+                .0,
         );
         assert_eq!(output.chars().count(), 120 * 80);
     }
@@ -205,7 +233,7 @@ mod tests {
             &image
                 .resize(&input)
                 .expect("Failed to resize image")
-                .into_luma8(),
+                .0,
         );
         assert_eq!(output.len(), 120 * 80);
     }
