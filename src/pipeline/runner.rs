@@ -11,7 +11,7 @@ use crate::{
 };
 use crossbeam_channel::{select, Receiver, Sender};
 use image::DynamicImage;
-use std::{thread, time::Duration};
+use std::{borrow::Cow, iter, thread, time::Duration};
 
 /// Represents the playback state of the Runner.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -47,6 +47,8 @@ pub struct Runner {
     last_frame: Option<DynamicImage>,
     /// Runner options
     runner_options: RunnerOptions,
+    /// The target resolution (width and height) for the runner.
+    target_resolution: (u32, u32),
 }
 
 pub struct RunnerOptions {
@@ -97,6 +99,7 @@ impl Runner {
         rx_controls: Receiver<Control>,
         tx_control: Sender<MediaControl>,
         runner_options: RunnerOptions,
+        target_resolution: (u32, u32),
     ) -> Self {
         let char_maps: Vec<CharMaps> = vec![
             pipeline.char_map.clone(),
@@ -107,10 +110,10 @@ impl Runner {
             DOTTED.into(),
             GRADIENT.into(),
             CharMaps::Mosaic,
-            BRAILLE.into(),
+            CharMaps::TeletextMosaic,
             CharMaps::Braille,
         ];
-        Self {
+        let mut runner = Self {
             pipeline,
             media,
             state: State::Running,
@@ -120,7 +123,10 @@ impl Runner {
             char_maps,
             last_frame: None,
             runner_options,
-        }
+            target_resolution,
+        };
+        runner.adjust_pipeline_resolution();
+        runner
     }
 
     /// The main function responsible for running the animation.
@@ -194,19 +200,25 @@ impl Runner {
         // Add newlines to the rgb_info to match the ascii string These are not
         // really needed, but it's important if you want to copy/paste the
         // output and preserve the aspect.
-        if self.pipeline.new_lines {
-            let mut rgb_info_newline =
-                Vec::with_capacity(rgb_info.len() + 6 * self.pipeline.target_resolution.0 as usize);
+        let rgb_info = rgb_info.chunks(self.pipeline.target_resolution.0 as usize * 3)
+            .flat_map(|line| {
+                let prefix = iter::repeat(0u8).take(self.pipeline.char_map.get_line_prefix().chars().count() * 3);
+                let suffix = iter::repeat(0u8).take(self.pipeline.new_lines as usize * 6);
 
-            for (i, pixel) in rgb_info.chunks(3).enumerate() {
-                rgb_info_newline.extend_from_slice(pixel);
-                if (i + 1) % self.pipeline.target_resolution.0 as usize == 0 {
-                    rgb_info_newline.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
-                }
-            }
-            return Ok((self.pipeline.to_ascii(&grayimage), rgb_info_newline));
-        }
-        Ok((self.pipeline.to_ascii(&grayimage), rgb_info))
+                prefix.chain(line.iter().copied()).chain(suffix)
+            }).collect();
+
+        let ascii = if self.pipeline.char_map.get_line_prefix().is_empty() {
+            self.pipeline.to_ascii(&grayimage).join("")
+        } else {
+            assert_ne!(self.pipeline.target_resolution, self.target_resolution);
+            self.pipeline.to_ascii(&grayimage)
+                .into_iter()
+                .flat_map(|line| [Cow::Borrowed(self.pipeline.char_map.get_line_prefix()), Cow::Owned(line)])
+                .collect()
+        };
+
+        Ok((ascii, rgb_info))
     }
 
     /// Processes control commands from the commands buffer and updates the Runner state and
@@ -255,10 +267,9 @@ impl Runner {
     /// * `width` - The new target width.
     /// * `height` - The new target height.
     fn resize_pipeline(&mut self, width: u16, height: u16) {
-        let _ = self.pipeline.set_target_resolution(
-            (width / self.runner_options.w_mod as u16).into(),
-            height.into(),
-        );
+        self.target_resolution = (width.into(), height.into());
+
+        self.adjust_pipeline_resolution();
     }
 
     /// Sets the character map for the image pipeline based on the provided index.
@@ -269,6 +280,16 @@ impl Runner {
     fn set_char_map(&mut self, char_map: u32) {
         self.pipeline.char_map =
             self.char_maps[(char_map % self.char_maps.len() as u32) as usize].clone();
+        self.adjust_pipeline_resolution();
+    }
+
+    fn adjust_pipeline_resolution(&mut self) {
+        let prefix_length: u32 = self.pipeline.char_map.get_line_prefix().chars().count().try_into().unwrap();
+
+        let _ = self.pipeline.set_target_resolution(
+            (self.target_resolution.0 / self.runner_options.w_mod) - prefix_length,
+            self.target_resolution.1,
+        );
     }
 
     /// Determines if a frame should be processed based on the current time and the Runner's state.
@@ -446,6 +467,7 @@ mod tests {
                 w_mod: 1,
                 loop_playback,
             },
+            (0, 0)
         );
 
         let mut time_count = std::time::Instant::now();

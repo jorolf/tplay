@@ -25,11 +25,14 @@ pub const CHARS3: &str = r##" `.-':_,^=;><+!rc*/z?sLTv)J7(|Fi{C}fI31tlu[neoZ5Yxj
 pub const SOLID: &str = r#"█"#; // 1 Solid block
 pub const DOTTED: &str = r#"⣿"#; // 1 dotted block
 pub const GRADIENT: &str = r#" ░▒▓█"#; // 5 chars
-pub const BRAILLE: &str = r#" ··⣀⣀⣤⣤⣤⣀⡀⢀⠠⠔⠒⠑⠊⠉⠁"#; // 16 chars (braille-based)
 
 pub trait CharMap : Clone {
     fn get_char(&self, image: &SubImage<&GrayImage>) -> char;
     fn get_subpixels(&self) -> (u32, u32);
+
+    fn get_line_prefix(&self) -> &str {
+        ""
+    }
 }
 
 impl CharMap for Vec<char> {
@@ -122,11 +125,61 @@ impl CharMap for Mosaic {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TeletextMosaic;
+
+fn teletext_mosaic_char(bitmask: u8) -> char {
+    const MOSAIC_BASE: u32 = 0xE020;
+    let bitmask = bitmask as u32;
+
+    if bitmask >= 0x40 {
+        panic!("Mosaic bitmask out of bounds: {bitmask:X} > 0x40")
+    }
+
+    let mosaic = MOSAIC_BASE + (bitmask & 0x1F) + ((bitmask & 0x20) << 1);
+
+    assert!((0xE000..=0xE0FF).contains(&mosaic));
+
+    char::from_u32(mosaic).unwrap()
+}
+
+impl CharMap for TeletextMosaic {
+    fn get_char(&self, image: &SubImage<&GrayImage>) -> char {
+        let mut mosaic = 0;
+
+        let mosaic_blocks = [
+            ((0, 0), 0x1),
+            ((1, 0), 0x2),
+            ((0, 1), 0x4),
+            ((1, 1), 0x8),
+            ((0, 2), 0x10),
+            ((1, 2), 0x20),
+        ];
+
+        for ((x, y), mosaic_bit) in mosaic_blocks {
+            if image.get_pixel(x, y)[0] > 127 {
+                    mosaic += mosaic_bit;
+            }
+        }
+
+        teletext_mosaic_char(mosaic)
+    }
+
+    fn get_subpixels(&self) -> (u32, u32) {
+        (2, 3)
+    }
+
+    fn get_line_prefix(&self) -> &str {
+        "\u{E017}"
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CharMaps {
     Simple(Vec<char>),
     Braille,
     Mosaic,
+    TeletextMosaic,
 }
 
 impl CharMap for CharMaps {
@@ -135,6 +188,7 @@ impl CharMap for CharMaps {
             CharMaps::Simple(vec) => vec.get_char(image),
             CharMaps::Braille => Braille.get_char(image),
             CharMaps::Mosaic => Mosaic.get_char(image),
+            CharMaps::TeletextMosaic => TeletextMosaic.get_char(image),
         }
     }
 
@@ -143,6 +197,14 @@ impl CharMap for CharMaps {
             CharMaps::Simple(vec) => vec.get_subpixels(),
             CharMaps::Braille => Braille.get_subpixels(),
             CharMaps::Mosaic => Mosaic.get_subpixels(),
+            CharMaps::TeletextMosaic => TeletextMosaic.get_subpixels(),
+        }
+    }
+
+    fn get_line_prefix(&self) -> &str {
+        match self {
+            CharMaps::TeletextMosaic => TeletextMosaic.get_line_prefix(),
+            _ => ""
         }
     }
 }

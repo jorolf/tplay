@@ -146,29 +146,29 @@ impl<T: CharMap> ImagePipeline<T> {
     /// # Returns
     ///
     /// A `String` containing the ASCII art representation of the input image.
-    pub fn to_ascii(&self, input: &GrayImage) -> String {
+    pub fn to_ascii(&self, input: &GrayImage) -> Vec<String> {
         let (width, height) = self.target_resolution;
-        
-        let capacity = (width + 1) * height + 1;
-        let mut output = String::with_capacity(capacity as usize);
+
+        let mut output = Vec::with_capacity(height as usize);
 
         let (subpixel_width, subpixel_height) = self.char_map.get_subpixels();
         assert_eq!(width * subpixel_width, input.width());
         assert_eq!(height * subpixel_height, input.height());
 
         for y in 0..height {
-            output.extend((0..width).map(|x| {
+            let line = (0..width).map(|x| {
                 self.char_map.get_char(&input.view(x * subpixel_width, y * subpixel_height, subpixel_width, subpixel_height))
-            }));
-
+            })
             // Add newlines to the end of each row except the last. NOTE: these
             // are not really needed because the terminal will wrap lines. But
             // if you want to copy the output to a file it would be a single
             // long string without them.
-            if self.new_lines && y < height - 1 {
-                output.push('\r');
-                output.push('\n');
-            }
+            .chain(
+                ['\n', '\r'].into_iter().take(if self.new_lines && y < height - 1 { 2 } else { 0 })
+            )
+            .collect();
+
+            output.push(line);
         }
 
         output
@@ -222,7 +222,7 @@ mod tests {
                 .expect("Failed to resize image")
                 .0,
         );
-        assert_eq!(output.chars().count(), 120 * 80);
+        assert_eq!(output.iter().map(|str| str.chars().count()).sum::<usize>(), 120 * 80);
     }
 
     #[test]
@@ -235,6 +235,6 @@ mod tests {
                 .expect("Failed to resize image")
                 .0,
         );
-        assert_eq!(output.len(), 120 * 80);
+        assert_eq!(output.iter().map(|str| str.chars().count()).sum::<usize>(), 120 * 80);
     }
 }

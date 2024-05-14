@@ -144,6 +144,7 @@ impl MediaProcessor {
                     w_mod,
                     loop_playback,
                 },
+                DEFAULT_TERMINAL_SIZE
             );
             runner.run(barrier, allow_frame_skip)
         });
