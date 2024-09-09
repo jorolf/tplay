@@ -16,7 +16,7 @@ use crossbeam_channel::{bounded, unbounded};
 use either::Either;
 use msg::broker::Control as MediaControl;
 use pipeline::{
-    char_maps::CHARS1, frames::open_media, frames::FrameIterator, image_pipeline::ImagePipeline,
+    frames::open_media, frames::FrameIterator, image_pipeline::ImagePipeline,
     runner::Control as PipelineControl, runner::RunnerOptions,
 };
 use std::thread;
@@ -37,9 +37,6 @@ struct Args {
     /// Loop playing of video/gif
     #[arg(short, long, default_value = "false")]
     loop_playback: bool,
-    /// Custom lookup char table
-    #[arg(short, long, default_value = CHARS1)]
-    char_map: String,
     /// Grayscale mode
     #[arg(short, long, default_value = "false")]
     gray: bool,
@@ -52,6 +49,9 @@ struct Args {
     /// Experimental flag to add newlines
     #[arg(short, long, default_value = "false")]
     new_lines: bool,
+
+    #[arg(short, long, default_value = "false")]
+    mute: bool,
 }
 
 const DEFAULT_TERMINAL_SIZE: (u32, u32) = (80, 24);
@@ -127,14 +127,13 @@ impl MediaProcessor {
                 .parse::<f64>()
                 .map_err(|err| MyError::Application(format!("{ERROR_DATA}:{err:?}")))?;
         }
-        let cmaps = (&args.char_map).into();
         let w_mod = args.w_mod;
         let loop_playback = args.loop_playback;
         let allow_frame_skip = args.allow_frame_skip;
         let new_lines = args.new_lines;
         let handle = thread::spawn(move || -> Result<(), MyError> {
             let mut runner = pipeline::runner::Runner::new(
-                ImagePipeline::new(DEFAULT_TERMINAL_SIZE, cmaps, new_lines),
+                ImagePipeline::new(DEFAULT_TERMINAL_SIZE, pipeline::char_maps::CharMaps::TeletextMosaic, new_lines),
                 media,
                 tx_frames,
                 rx_controls_pipeline,
@@ -182,7 +181,7 @@ fn main() -> Result<(), MyError> {
     let media_data = open_media(title)?;
     let media = media_data.frame_iter;
     let fps = media_data.fps;
-    let audio = media_data.audio_path;
+    let audio = media_data.audio_path.filter(|_| !args.mute);
 
     let num_threads = if audio.is_some() { 4 } else { 3 };
 
