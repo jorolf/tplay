@@ -166,6 +166,12 @@ within `cargo build`, `cargo run`, or `cargo install` commands.
 
 MPV support may be dropped in future releases.
 
+# Docker
+Building Container:
+`docker build -t tplay ./`
+Running Container:
+`docker run -it --device /dev/snd localhost:tplay tplay [args]`
+
 # Usage
 `tplay <media> [options]`
 
