@@ -41,7 +41,7 @@ impl CharMap for Vec<char> {
         let lookup_idx = self.len() * lum as usize / (u8::MAX as usize + 1);
         self[lookup_idx]
     }
-    
+
     fn get_subpixels(&self) -> (u32, u32) {
         (1, 1)
     }
@@ -129,18 +129,50 @@ impl CharMap for Mosaic {
 struct TeletextMosaic;
 
 fn teletext_mosaic_char(bitmask: u8) -> char {
-    const MOSAIC_BASE: u32 = 0xE020;
+    //const MOSAIC_BASE: u32 = 0xE020;
     let bitmask = bitmask as u32;
 
-    if bitmask >= 0x40 {
-        panic!("Mosaic bitmask out of bounds: {bitmask:X} > 0x40")
+    match (bitmask & 0x1F) + ((bitmask & 0x20) << 1) {
+        0x00 => ' ',
+        0x01 => '!',
+        0x02 => '"',
+        0x03 => '£',
+        0x04 => '$',
+        0x05 => '%',
+        0x06 => '&',
+        0x07 => '\'',
+        0x08 => '(',
+        0x09 => ')',
+        0x0A => '*',
+        0x0B => '+',
+        0x0C => ',',
+        0x0D => '-',
+        0x0E => '.',
+        0x0F => '/',
+        0x10..=0x19 => char::from_u32(('0' as u32) + (bitmask - 0x10)).unwrap(),
+        0x1A => ':',
+        0x1B => ';',
+        0x1C => '<',
+        0x1D => '=',
+        0x1E => '>',
+        0x1F => '?',
+        /*0x20 => '@',
+        0x21..=0x3A => char::from_u32(('A' as u32) + (bitmask - 0x21)).unwrap(),
+        0x3B => '←',
+        0x3C => '½',
+        0x3D => '→',
+        0x3E => '↑',
+        0x3F => '#',*/
+        0x40 => '—',
+        0x41..=0x5A => char::from_u32(('a' as u32) + (bitmask - 0x21)).unwrap(),
+        0x5B => '¼',
+        0x5C => '‖',
+        0x5D => '¾',
+        0x5E => '÷',
+        0x5F => '■',
+        //0x00..=0x5F => char::from_u32(MOSAIC_BASE + (bitmask & 0x1F) + ((bitmask & 0x20) << 1)).unwrap(),
+        _ => panic!("Mosaic bitmask out of bounds: {bitmask:X} > 0x40")
     }
-
-    let mosaic = MOSAIC_BASE + (bitmask & 0x1F) + ((bitmask & 0x20) << 1);
-
-    assert!((0xE000..=0xE0FF).contains(&mosaic));
-
-    char::from_u32(mosaic).unwrap()
 }
 
 impl CharMap for TeletextMosaic {
